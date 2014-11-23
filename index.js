@@ -4,9 +4,9 @@ var http = require('http'),
 	readline = require('readline'),
 	google = require('googleapis'),
 	OAuth2Client = google.auth.OAuth2,
-	gmail = google.gmail('v1'),
-	formidable = require('formidable'),
-	util = require('util');
+	gmail = google.gmail('v1');
+
+var parser = require('http-string-parser');
 
 var CLIENT_ID = '678036308788-tg49689s46v6tmrar31e3ct7b81qnq68.apps.googleusercontent.com',
 	CLIENT_SECRET = 'F_nARPucHQvKXWk18qaQQrPD',
@@ -19,16 +19,15 @@ var server = http.createServer(function(req, res){
 	if(req.url.indexOf('/oa')==0){
 		
 		var code = req.url.slice(9);
-		console.log("Received code: " + code);
+		// console.log("Received code: " + code);
 
 		getAccessToken(code, function(){
-			gmail.users.messages.list({ userId: 'me', auth: oauth2Client, labelIds:["INBOX"], maxResults: 10 }, function(err,list){
+			gmail.users.messages.list({ userId: 'me', auth: oauth2Client, labelIds:["INBOX"], maxResults: 100 }, function(err,list){
 				if(err){
 					console.log('An error occured', err);
 					return;
 			  	}
 			  	var msgs = list.messages;
-			  	console.log(JSON.stringify(msgs));
 
 			  	var boundary = "batch_foobarbaz";
 
@@ -63,14 +62,45 @@ var server = http.createServer(function(req, res){
 				  	req_post.write(bat);
 				  	req_post.end();
 				  	var details = "";
+				  	var snip;
 				  	req_post.on('response', function(response) {
 				  		response.on('data', function (chunk) {
 				  			details += chunk.toString();
 					    });
-					    response.on('end', function () {
-				    		console.log("end");
-					    	res.end("<pre>" + details + "</pre>");
-					    	process.exit();
+					    response.on('end', function(){
+				    		result = parser.parseResponse(details);
+				    		bdy = result.body.split("\r\n");
+				    		var res_boundary = bdy[bdy.length-2];
+				    		res_boundary = res_boundary.substring(0,res_boundary.length-2);
+				    		var objs = [];
+				    		var i = 0;
+					    	function next(line){
+					    		i++;
+					    		if(line == res_boundary){
+					    			if(bdy.length)
+										next(bdy.shift());
+					    		}
+					    		else if(line == res_boundary + '--'){
+					    			res.end("<pre>"+objs.join("\n")+"</pre>");
+					    			process.exit();
+					    			if(bdy.length)
+										next(bdy.shift());
+					    		}
+					    		else if(line != '' && line && line[0] == '{'){
+					    			var hds = JSON.parse(line).payload.headers;
+					    			for(var i=0; i<hds.length; i++){
+					    				if(hds[i].name=="From"){
+					    					objs.push(hds[i].value);
+					    					break;
+					    				}
+					    			}
+									if(bdy.length)
+										next(bdy.shift());
+								}
+								else if(bdy.length)
+									next(bdy.shift());
+					    	}
+					    	next(bdy.shift());
 					    });
 					});
 				}
